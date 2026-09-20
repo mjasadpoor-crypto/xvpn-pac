@@ -9,5 +9,5 @@ function FindProxyForURL(url, host) {
     if (host == "ir" || dnsDomainIs(host, ".ir")) {
         return "DIRECT";
     }
-return "PROXY 106.138.235.226:8080";
+return "PROXY 127.0.0.1:8080";
 }
