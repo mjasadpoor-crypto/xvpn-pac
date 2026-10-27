@@ -10,6 +10,8 @@ import android.graphics.PixelFormat;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.RemoteException;
 import android.provider.Settings;
 import android.view.Gravity;
@@ -42,6 +44,8 @@ public class MainActivity extends Activity implements ServiceConnection, Shizuku
     private TextView floatingButton;
     private ServerSocket serverSocket;
     private boolean binding = false;
+    private final Handler countdownHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingCapture = null;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -89,8 +93,11 @@ public class MainActivity extends Activity implements ServiceConnection, Shizuku
         Button captureButton = addButton(layout, "Test capture while this app is open");
         captureButton.setOnClickListener(v -> capture());
 
+        Button delayedButton = addButton(layout, "3. Screenshot in 10 seconds (no floating button)");
+        delayedButton.setOnClickListener(v -> startDelayedCapture());
+
         TextView help = new TextView(this);
-        help.setText("\nThis app needs the separate Shizuku app running. The floating button also requires Android's Display over other apps permission. Saved images are reported in a toast. Some Android versions may still refuse secure screenshots.\n\nDo not share screenshots containing account numbers or private information.");
+        help.setText("\nThis app needs the separate Shizuku app running. The floating button also requires Android's Display over other apps permission. For apps that hide floating buttons, use the 10-second capture timer and immediately switch to the target app using Recents. Results are shown here. Some Android versions may still refuse secure screenshots.\n\nDo not share screenshots containing account numbers or private information.");
         help.setTextSize(13);
         help.setTextColor(Color.rgb(160, 176, 197));
         layout.addView(help, new LinearLayout.LayoutParams(-1, -2));
@@ -214,7 +221,26 @@ public class MainActivity extends Activity implements ServiceConnection, Shizuku
         }
     }
 
+    private void startDelayedCapture() {
+        if (remoteBinder == null || !remoteBinder.pingBinder()) {
+            showStatus("First connect Shizuku, then press the 10-second capture button.");
+            return;
+        }
+        if (pendingCapture != null) countdownHandler.removeCallbacks(pendingCapture);
+        statusText.setText("10-second capture armed. Switch to the desired app NOW using Recents.");
+        Toast.makeText(getApplicationContext(), "Switch to the desired screen now. Capture in 10 seconds.", Toast.LENGTH_LONG).show();
+        pendingCapture = () -> {
+            pendingCapture = null;
+            capture(false);
+        };
+        countdownHandler.postDelayed(pendingCapture, 10000L);
+    }
+
     private void capture() {
+        capture(true);
+    }
+
+    private void capture(boolean toastOnRequest) {
         try {
             if (remoteBinder == null || !remoteBinder.pingBinder()) {
                 showStatus("Shizuku service not connected. Press Connect Shizuku.");
@@ -226,7 +252,11 @@ public class MainActivity extends Activity implements ServiceConnection, Shizuku
                 return;
             }
             userService.doCap(PORT);
-            showStatus("Capture requested. Watch for success/failure toast.");
+            if (toastOnRequest) {
+                showStatus("Capture requested. Watch for success/failure toast.");
+            } else if (statusText != null) {
+                statusText.setText("Delayed capture requested. Return here to view SUCCESS/FAILED result.");
+            }
         } catch (RemoteException error) {
             showStatus("Capture service error: " + error.getClass().getSimpleName());
         } catch (Throwable error) {
@@ -265,6 +295,7 @@ public class MainActivity extends Activity implements ServiceConnection, Shizuku
 
     @Override
     protected void onDestroy() {
+        if (pendingCapture != null) countdownHandler.removeCallbacks(pendingCapture);
         if (floatingButton != null && windowManager != null) {
             try { windowManager.removeView(floatingButton); } catch (Throwable ignored) {}
             floatingButton = null;
