@@ -19,13 +19,19 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Prepare Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Build APK
         working-directory: source
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+      - name: Verify APK
+        run: |
+          test -s source/app/build/outputs/apk/debug/app-debug.apk
+          unzip -t source/app/build/outputs/apk/debug/app-debug.apk | tail -1
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
