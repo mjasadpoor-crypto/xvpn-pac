@@ -30,6 +30,7 @@ import java.net.Socket;
 import rikka.shizuku.Shizuku;
 
 public class MainActivity extends Activity implements ServiceConnection, Shizuku.OnRequestPermissionResultListener {
+    public static final String TAG = "XGS";
     private static final int PORT = 34567;
     private static final int SHIZUKU_PERMISSION_REQUEST = 61;
 
