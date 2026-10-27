@@ -7,6 +7,7 @@ import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -15,6 +16,7 @@ import android.os.Looper;
 import android.os.RemoteException;
 import android.provider.Settings;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -42,6 +44,7 @@ public class MainActivity extends Activity implements ServiceConnection, Shizuku
     private Button overlayButton;
     private WindowManager windowManager;
     private TextView floatingButton;
+    private WindowManager.LayoutParams floatingParams;
     private ServerSocket serverSocket;
     private boolean binding = false;
     private final Handler countdownHandler = new Handler(Looper.getMainLooper());
@@ -87,8 +90,11 @@ public class MainActivity extends Activity implements ServiceConnection, Shizuku
         Button connectButton = addButton(layout, "1. Connect Shizuku");
         connectButton.setOnClickListener(v -> connectShizuku());
 
-        overlayButton = addButton(layout, "2. Enable floating screenshot button");
+        overlayButton = addButton(layout, "2. Enable mini draggable CAP button");
         overlayButton.setOnClickListener(v -> enableOverlay());
+
+        Button hideFloatingButton = addButton(layout, "Hide / disable floating CAP button");
+        hideFloatingButton.setOnClickListener(v -> disableOverlay(true));
 
         Button captureButton = addButton(layout, "Test capture while this app is open");
         captureButton.setOnClickListener(v -> capture());
@@ -97,7 +103,7 @@ public class MainActivity extends Activity implements ServiceConnection, Shizuku
         delayedButton.setOnClickListener(v -> startDelayedCapture());
 
         TextView help = new TextView(this);
-        help.setText("\nThis app needs the separate Shizuku app running. The floating button also requires Android's Display over other apps permission. For apps that hide floating buttons, use the 10-second capture timer and immediately switch to the target app using Recents. Results are shown here. Some Android versions may still refuse secure screenshots.\n\nDo not share screenshots containing account numbers or private information.");
+        help.setText("\nThis app needs the separate Shizuku app running. The mini CAP can be dragged. Tap to capture; hold it for one second to hide, or use the Hide button above. It needs Display over other apps permission. For apps that hide floating buttons, use the 10-second capture timer and immediately switch to the target app using Recents. Results are shown here. Some Android versions may still refuse secure screenshots.\n\nDo not share screenshots containing account numbers or private information.");
         help.setTextSize(13);
         help.setTextColor(Color.rgb(160, 176, 197));
         layout.addView(help, new LinearLayout.LayoutParams(-1, -2));
@@ -188,37 +194,118 @@ public class MainActivity extends Activity implements ServiceConnection, Shizuku
     private void enableOverlay() {
         try {
             if (!Settings.canDrawOverlays(this)) {
-                showStatus("Allow Display over other apps, then return and press this button again.");
-                Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                showStatus("Allow Display over other apps, then return and press Enable again.");
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                         Uri.parse("package:" + getPackageName()));
-                startActivity(i);
+                startActivity(intent);
                 return;
             }
             if (floatingButton != null) {
-                showStatus("Floating button is already enabled.");
+                showStatus("Mini CAP already enabled. Drag to move; hold to hide.");
                 return;
             }
             windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
             floatingButton = new TextView(this);
             floatingButton.setText("CAP");
-            floatingButton.setTextSize(15);
+            floatingButton.setTextSize(10);
             floatingButton.setGravity(Gravity.CENTER);
+            floatingButton.setIncludeFontPadding(false);
             floatingButton.setTextColor(Color.WHITE);
-            floatingButton.setBackgroundTintList(null);
-            floatingButton.setBackgroundColor(Color.rgb(0, 130, 150));
-            floatingButton.setOnClickListener(v -> capture());
-            WindowManager.LayoutParams p = new WindowManager.LayoutParams(
-                    dp(58), dp(58),
+
+            GradientDrawable shape = new GradientDrawable();
+            shape.setShape(GradientDrawable.OVAL);
+            shape.setColor(Color.argb(225, 0, 139, 150));
+            shape.setStroke(dp(1), Color.argb(190, 255, 255, 255));
+            floatingButton.setBackground(shape);
+            floatingButton.setElevation(dp(4));
+
+            final int diameter = dp(38);
+            int w = getResources().getDisplayMetrics().widthPixels;
+            int h = getResources().getDisplayMetrics().heightPixels;
+            android.content.SharedPreferences preferences =
+                    getSharedPreferences("floating_cap", MODE_PRIVATE);
+            int px = preferences.getInt("x", w - diameter - dp(12));
+            int py = preferences.getInt("y", h / 2);
+            floatingParams = new WindowManager.LayoutParams(
+                    diameter, diameter,
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                     PixelFormat.TRANSLUCENT);
-            p.gravity = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
-            windowManager.addView(floatingButton, p);
-            showStatus("Floating CAP button enabled. Open the desired screen and tap CAP.");
-        } catch (Throwable error) {
+            floatingParams.gravity = Gravity.TOP | Gravity.LEFT;
+            floatingParams.x = Math.max(0, Math.min(px, Math.max(0, w - diameter)));
+            floatingParams.y = Math.max(0, Math.min(py, Math.max(0, h - diameter)));
+
+            floatingButton.setOnTouchListener(new View.OnTouchListener() {
+                private float startRawX, startRawY;
+                private int startX, startY;
+                private long pressedAt;
+                private boolean moved;
+
+                @Override
+                public boolean onTouch(View view, MotionEvent event) {
+                    if (floatingParams == null || windowManager == null) return true;
+                    switch (event.getActionMasked()) {
+                        case MotionEvent.ACTION_DOWN:
+                            startRawX = event.getRawX();
+                            startRawY = event.getRawY();
+                            startX = floatingParams.x;
+                            startY = floatingParams.y;
+                            pressedAt = android.os.SystemClock.uptimeMillis();
+                            moved = false;
+                            return true;
+                        case MotionEvent.ACTION_MOVE:
+                            float dx = event.getRawX() - startRawX;
+                            float dy = event.getRawY() - startRawY;
+                            if (Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6)) moved = true;
+                            if (moved) {
+                                int maxX = Math.max(0, getResources().getDisplayMetrics().widthPixels - diameter);
+                                int maxY = Math.max(0, getResources().getDisplayMetrics().heightPixels - diameter);
+                                floatingParams.x = Math.max(0, Math.min(startX + Math.round(dx), maxX));
+                                floatingParams.y = Math.max(0, Math.min(startY + Math.round(dy), maxY));
+                                try {
+                                    windowManager.updateViewLayout(view, floatingParams);
+                                } catch (RuntimeException ex) {
+                                    showStatus("Unable to move CAP: " + ex.getClass().getSimpleName());
+                                }
+                            }
+                            return true;
+                        case MotionEvent.ACTION_UP:
+                            if (moved) {
+                                getSharedPreferences("floating_cap", MODE_PRIVATE).edit()
+                                        .putInt("x", floatingParams.x)
+                                        .putInt("y", floatingParams.y)
+                                        .apply();
+                            } else if (android.os.SystemClock.uptimeMillis() - pressedAt >= 850) {
+                                disableOverlay(true);
+                            } else {
+                                capture();
+                            }
+                            return true;
+                        case MotionEvent.ACTION_CANCEL:
+                            return true;
+                        default:
+                            return true;
+                    }
+                }
+            });
+            windowManager.addView(floatingButton, floatingParams);
+            overlayButton.setText("2. Mini draggable CAP enabled");
+            showStatus("CAP enabled. Tap = capture, drag = move, hold = hide.");
+        } catch (Throwable err) {
             floatingButton = null;
-            showStatus("Cannot show floating button: " + error.getClass().getSimpleName());
+            floatingParams = null;
+            showStatus("Cannot show floating button: " + err.getClass().getSimpleName());
         }
+    }
+
+    private void disableOverlay(boolean notify) {
+        if (floatingButton != null && windowManager != null) {
+            try { windowManager.removeView(floatingButton); } catch (Throwable ignored) {}
+        }
+        floatingButton = null;
+        floatingParams = null;
+        if (overlayButton != null) overlayButton.setText("2. Enable mini draggable CAP button");
+        if (notify) showStatus("Floating CAP disabled. Use Enable to turn it back on.");
     }
 
     private void startDelayedCapture() {
@@ -296,10 +383,7 @@ public class MainActivity extends Activity implements ServiceConnection, Shizuku
     @Override
     protected void onDestroy() {
         if (pendingCapture != null) countdownHandler.removeCallbacks(pendingCapture);
-        if (floatingButton != null && windowManager != null) {
-            try { windowManager.removeView(floatingButton); } catch (Throwable ignored) {}
-            floatingButton = null;
-        }
+        disableOverlay(false);
         if (serverSocket != null) {
             try { serverSocket.close(); } catch (IOException ignored) {}
         }
